@@ -39,8 +39,10 @@ if uploaded_file is not None:
             
             # Le motif (Regex) basé sur votre image
             # Explication : On cherche "Lambert 2 étendu:", des espaces, un nombre (X), " m,", un nombre (Y)
-            regex_pattern = r"Lambert 2 étendu:\s*([0-9.]+)\s*m,([0-9.]+)\s*m"
-
+  # Nouveau motif plus robuste (ignore les accents et gère mieux les sauts de ligne)
+            # Explication : On cherche "Lambert 2", puis n'importe quels caractères jusqu'au ":", 
+            # puis le nombre X, puis le séparateur (avec ou sans 'm'), puis le nombre Y.
+            regex_pattern = r"Lambert\s+2.*:\s*([0-9.]+)\s*(?:m|)\s*,\s*([0-9.]+)"
             # Boucle sur les pages sélectionnées
             # On fait range(start-1, end) car les pages commencent à 0 dans le code mais à 1 pour l'humain
             pages_to_process = range(start_page - 1, end_page)
@@ -98,4 +100,5 @@ if uploaded_file is not None:
             # Logs techniques (pour vérifier)
             with st.expander("Voir le journal de traitement"):
                 for log in logs:
+
                     st.write(log)
