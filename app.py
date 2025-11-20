@@ -30,14 +30,7 @@ if uploaded_file is not None:
             end_page = st.number_input("Page de fin", min_value=1, max_value=total_pages, value=total_pages)
 
         # Bouton pour lancer le traitement
-        if st.button("Extraire les coordonnées"):
-
-# À ajouter temporairement pour déboguer
-with st.expander("🔍 Voir le texte brut de la page 2 (Debug)"):
-    if len(pdf.pages) >= 2:
-        st.text(pdf.pages[1].extract_text())  
-
-            
+        if st.button("Extraire les coordonnées"): 
             results = []
             logs = []
 
@@ -112,5 +105,6 @@ with st.expander("🔍 Voir le texte brut de la page 2 (Debug)"):
                 for log in logs:
 
                     st.write(log)
+
 
 
