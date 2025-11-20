@@ -33,7 +33,13 @@ if uploaded_file is not None:
         if st.button("Extraire les coordonnées"):
             results = []
             logs = []
-            
+
+# À ajouter temporairement pour déboguer
+with st.expander("🔍 Voir le texte brut de la page 2 (Debug)"):
+    if len(pdf.pages) >= 2:
+        st.text(pdf.pages[1].extract_text())  
+
+        
             # Barre de progression
             progress_bar = st.progress(0)
             
@@ -102,3 +108,4 @@ if uploaded_file is not None:
                 for log in logs:
 
                     st.write(log)
+
