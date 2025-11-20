@@ -1,110 +1,124 @@
 import streamlit as st
-import pdfplumber
+import pytesseract
+from pdf2image import convert_from_bytes
+from PIL import Image
 import re
-from io import BytesIO
+import io
 
 # Configuration de la page
-st.set_page_config(page_title="Extracteur Lambert 2", layout="centered")
+st.set_page_config(page_title="Extracteur Lambert 2 (OCR)", layout="centered")
 
-st.title("📍 Extracteur de Coordonnées Lambert 2")
-st.markdown("""
-Cette application lit un PDF, cherche les coordonnées au format :
-**Lambert 2 étendu: X m,Y m,L2E** et génère un fichier CSV/Texte prêt à l'emploi.
-""")
+st.title("📍 Extracteur Lambert 2 (Mode OCR)")
+st.info("ℹ️ Ce mode utilise la reconnaissance visuelle (OCR). C'est plus lent mais beaucoup plus puissant pour les documents scannés.")
 
 # 1. Upload du fichier
 uploaded_file = st.file_uploader("Choisissez votre fichier PDF", type="pdf")
 
 if uploaded_file is not None:
-    # On ouvre le PDF pour compter les pages
-    with pdfplumber.open(uploaded_file) as pdf:
-        total_pages = len(pdf.pages)
-        st.success(f"Fichier chargé avec succès ! ({total_pages} pages)")
+    # Lire le fichier en binaire
+    pdf_bytes = uploaded_file.getvalue()
+    
+    # On utilise pdf2image pour compter les pages rapidement sans tout convertir d'un coup
+    # (Une petite astuce pour avoir le nombre de pages sans surcharger la mémoire)
+    try:
+        info = convert_from_bytes(pdf_bytes, first_page=1, last_page=1)
+        # Malheureusement pdf2image ne donne pas le total facilement sans tout charger
+        # On va demander à l'utilisateur ou mettre une limite par défaut, 
+        # ou utiliser une méthode légère pour compter.
+        # Pour simplifier ici, on charge la première page pour valider le PDF.
+        st.success("Fichier chargé. Prêt pour l'analyse.")
+    except Exception as e:
+        st.error(f"Erreur de lecture du PDF : {e}")
 
-        # 2. Sélection de la plage de pages
-        st.subheader("Paramètres d'extraction")
-        col1, col2 = st.columns(2)
-        with col1:
-            start_page = st.number_input("Page de début", min_value=1, max_value=total_pages, value=1)
-        with col2:
-            end_page = st.number_input("Page de fin", min_value=1, max_value=total_pages, value=total_pages)
+    # 2. Paramètres
+    st.subheader("Paramètres d'extraction")
+    col1, col2 = st.columns(2)
+    with col1:
+        start_page = st.number_input("Page de début", min_value=1, value=1)
+    with col2:
+        # On met une valeur arbitraire haute par défaut, le code s'arrêtera à la fin du PDF
+        end_page = st.number_input("Page de fin (estimation)", min_value=1, value=30)
 
-        # Bouton pour lancer le traitement
-        if st.button("Extraire les coordonnées"): 
-            results = []
-            logs = []
-
-
-
+    if st.button("Lancer l'analyse OCR"):
+        results = []
+        logs = []
         
-            # Barre de progression
-            progress_bar = st.progress(0)
+        # Barre de progression
+        progress_text = "Démarrage de l'OCR... (cela peut prendre quelques secondes par page)"
+        my_bar = st.progress(0, text=progress_text)
+        
+        # Regex très flexible pour l'OCR (tolère les fautes de lecture comme 'etendu' sans accent)
+        # On cherche : "Lambert" ... un "2" ... un ":" ... (nombre X) ... (nombre Y)
+        regex_pattern = r"Lambert.*?2.*?:?\s*([0-9]{6,7}[.,]?[0-9]*).*?([0-9]{7}[.,]?[0-9]*)"
+
+        # On boucle sur les pages demandées
+        for i in range(start_page, end_page + 1):
+            try:
+                # Conversion PDF -> Image (une seule page à la fois pour économiser la RAM)
+                # dpi=300 assure une bonne qualité de lecture
+                images = convert_from_bytes(pdf_bytes, first_page=i, last_page=i, fmt='jpeg', dpi=300)
+                
+                if not images:
+                    break # Fin du document atteinte
+                
+                page_image = images[0]
+                
+                # OPTIMISATION : On ne rogne que la partie GAUCHE de l'image (30% de la largeur)
+                # Cela accélère l'OCR et réduit les erreurs en ignorant le plan à droite.
+                width, height = page_image.size
+                left_area = (0, 0, width * 0.35, height) # Crop: Gauche, Haut, Droite, Bas
+                cropped_image = page_image.crop(left_area)
+                
+                # Extraction du texte via Tesseract
+                # config='--psm 6' assume un bloc de texte uniforme
+                text = pytesseract.image_to_string(cropped_image, lang='fra', config='--psm 6')
+                
+                # Nettoyage basique (remplacer les virgules par des points pour les décimales si besoin)
+                text_clean = text.replace('\n', ' ') # Mettre sur une ligne pour aider le regex
+                
+                # Recherche
+                matches = re.findall(regex_pattern, text_clean, re.IGNORECASE)
+                
+                if matches:
+                    for match in matches:
+                        # On nettoie les nombres (parfois l'OCR met des virgules au lieu de points)
+                        x = match[0].replace(',', '.')
+                        y = match[1].replace(',', '.')
+                        
+                        results.append(f"{x},{y}")
+                        logs.append(f"Page {i}: ✅ Trouvé -> {x}, {y}")
+                else:
+                    # Debug : afficher un bout de ce que l'OCR a vu pour comprendre
+                    excerpt = text_clean[:100].replace('\n', '') 
+                    logs.append(f"Page {i}: ❌ Rien trouvé. (OCR a vu: '{excerpt}...')")
+
+                # Mise à jour barre
+                my_bar.progress((i - start_page + 1) / (end_page - start_page + 1), text=f"Traitement page {i}...")
+                
+            except Exception as e:
+                logs.append(f"Page {i}: Erreur ou fin du document ({str(e)})")
+                break
+
+        my_bar.empty()
+
+        # 3. Résultats
+        st.divider()
+        if results:
+            st.success(f"Extraction terminée ! {len(results)} coordonnées trouvées.")
+            txt_output = "\n".join(results)
             
-            # Le motif (Regex) basé sur votre image
-            # Explication : On cherche "Lambert 2 étendu:", des espaces, un nombre (X), " m,", un nombre (Y)
-  # Nouveau motif plus robuste (ignore les accents et gère mieux les sauts de ligne)
-            # Explication : On cherche "Lambert 2", puis n'importe quels caractères jusqu'au ":", 
-            # puis le nombre X, puis le séparateur (avec ou sans 'm'), puis le nombre Y.
-            regex_pattern = r"Lambert\s+2.*:\s*([0-9.]+)\s*(?:m|)\s*,\s*([0-9.]+)"
-            # Boucle sur les pages sélectionnées
-            # On fait range(start-1, end) car les pages commencent à 0 dans le code mais à 1 pour l'humain
-            pages_to_process = range(start_page - 1, end_page)
+            with st.expander("Voir les résultats"):
+                st.text(txt_output)
             
-            for i, page_num in enumerate(pages_to_process):
-                page = pdf.pages[page_num]
-                
-                # On se concentre sur la partie gauche/centrale (optionnel, mais aide à la précision)
-                # width = page.width
-                # height = page.height
-                # crop_box = (0, 0, width * 0.7, height) # On ne regarde que les 70% gauche
-                # cropped_page = page.crop(crop_box)
-                # text = cropped_page.extract_text()
-                
-                # Pour l'instant, on lit toute la page car le label est très spécifique
-                text = page.extract_text()
-                
-                if text:
-                    matches = re.findall(regex_pattern, text)
-                    if matches:
-                        for match in matches:
-                            x_coord = match[0]
-                            y_coord = match[1]
-                            # Ajout au format demandé : X,Y
-                            results.append(f"{x_coord},{y_coord}")
-                            logs.append(f"Page {page_num + 1}: Trouvé -> {x_coord}, {y_coord}")
-                    else:
-                        logs.append(f"Page {page_num + 1}: Aucune coordonnée trouvée.")
-                
-                # Mise à jour barre de progression
-                progress_bar.progress((i + 1) / len(pages_to_process))
+            st.download_button(
+                label="📥 Télécharger le fichier texte",
+                data=txt_output,
+                file_name="coordonnees_lambert_ocr.txt",
+                mime="text/plain"
+            )
+        else:
+            st.warning("Aucune coordonnée trouvée.")
 
-            # 3. Affichage et Téléchargement
-            st.divider()
-            if results:
-                st.success(f"{len(results)} coordonnées extraites !")
-                
-                # Création du contenu du fichier texte
-                txt_output = "\n".join(results)
-                
-                # Aperçu des données
-                with st.expander("Voir les données extraites"):
-                    st.text(txt_output)
-                
-                # Bouton de téléchargement
-                st.download_button(
-                    label="📥 Télécharger le fichier texte (X,Y)",
-                    data=txt_output,
-                    file_name="coordonnees_lambert.txt",
-                    mime="text/plain"
-                )
-            else:
-                st.warning("Aucune coordonnée correspondant au format n'a été trouvée dans les pages sélectionnées.")
-            
-            # Logs techniques (pour vérifier)
-            with st.expander("Voir le journal de traitement"):
-                for log in logs:
-
-                    st.write(log)
-
-
-
+        with st.expander("Journal détaillé (Logs)"):
+            for log in logs:
+                st.write(log)
